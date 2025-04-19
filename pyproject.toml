@@ -1,0 +1,13 @@
+[project]
+name = "ComfyUI-Real-ESRGAN"
+description = "Nodes: No Has Nodes"
+version = "1.0.0"
+license = { file = "LICENSE" }
+
+[project.urls]
+Repository = "https://github.com/TencentARC/GFPGAN"
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI-Real-ESRGAN"
+Icon = ""
