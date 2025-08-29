@@ -10,8 +10,9 @@ from torchvision.transforms.functional import normalize
 import torchvision.transforms.functional as TF
 from torchvision.ops import masks_to_boxes
 
-from torchvision import transforms
-from transformers import AutoModelForImageSegmentation
+from modelscope.outputs import OutputKeys
+from modelscope.pipelines import pipeline
+from modelscope.utils.constant import Tasks
 from facexlib.utils.face_restoration_helper import FaceRestoreHelper
 
 import folder_paths
@@ -166,6 +167,108 @@ class GFPGANModelLoader:
         result = {"gfpgan": gfpgan, "face_helper": face_helper}
 
         return (result,)
+
+
+class InpaintingLamaModelLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_name": (
+                    ["iic/cv_fft_inpainting_lama"],
+                    {"default": "iic/cv_fft_inpainting_lama"}),
+            }
+        }
+
+    RETURN_TYPES = ("InpaintingLama_Model",)
+    FUNCTION = "load_model"
+
+    CATEGORY = "Real-ESRGAN/Model"
+
+    def load_model(self, model_name):
+        model_path = os.path.join(os.path.join(folder_paths.models_dir, model_name))
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        inpainting = pipeline(Tasks.image_inpainting, model=model_path, refine=True, device=device)
+
+        return (inpainting,)
+
+
+class InpaintingLamaImageGenerator:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image_model": ("InpaintingLama_Model",),
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "threshold": ("FLOAT", {"default": 0.25, "min": 0, "max": 1.0, "step": 0.01}),
+            },
+            "optional": {
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
+    FUNCTION = "gan_image"
+    CATEGORY = "Real-ESRGAN/Mask"
+
+    @torch.no_grad()
+    def gan_image(self, image_model, image, mask, threshold=0.25):
+        # image_width, image_height = image.shape[1], image.shape[2]
+        # mask_width, mask_height = mask.shape[1], mask.shape[2]
+
+        # if image_width == mask_width and image_height == mask_height:
+        #     # mask = mask.unsqueeze(-1)  # 形状变为 [b, w, h, c]
+        #     # 提取前三个通道,沿通道维度（dim=3）拼接
+        #     image = torch.cat([image[..., :3], mask.unsqueeze(-1)[..., :1]], dim=3)
+
+        #  torch.Size([1, 494, 933, 3]) torch.Size([1, 64, 64])
+        print("shape b ", image.shape, mask.shape)
+
+        # image_rgb = image[..., :3]
+        # image_alpha = image[..., 3]
+
+        rgb_pil = Image.fromarray(
+            torch.clamp(torch.round(255.0 * image[0]), 0, 255)
+            .type(torch.uint8)
+            .cpu()
+            .numpy()
+        ).convert("RGB")
+
+        alpha_pil = Image.fromarray(
+            torch.clamp(torch.round(255.0 * mask[0]), 0, 255)
+            .type(torch.uint8)
+            .cpu()
+            .numpy()
+        ).convert("L")
+
+        input = {
+            'img': rgb_pil,
+            'mask': alpha_pil,
+        }
+
+        # image_rgb = image_rgb.permute(0, 3, 1, 2)  # (b, h, w, c) --> (b, c, h, w)
+
+        results = image_model(input)
+        result = results[OutputKeys.OUTPUT_IMG]
+
+        result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+
+        image_rgb = torch.from_numpy(result_rgb) / 255
+        image_rgb = image_rgb.unsqueeze(0)
+
+        print("gan_image", result.shape, image_rgb.shape)  # torch.Size([1, 494, 933, 3])
+        # torch.Size([1, 494, 933, 3]) torch.Size([1, 64, 64])
+
+        # image_rgb = image_rgb.permute(0, 3, 1, 2)  # (b, h, w, c) --> (b, c, h, w)
+        # print("gan_image 22", result.shape, image_rgb.shape)
+
+        torch.cuda.empty_cache()
+        # gan_image (494, 933, 3)
+
+        # print("return final", mask.shape, result.shape)
+
+        return (image_rgb, mask)
 
 
 class RealESRGANImageGenerator:
@@ -351,6 +454,8 @@ NODE_CLASS_MAPPINGS = {
     "GFPGANModelLoader": GFPGANModelLoader,
     "RealESRGANImageGenerator": RealESRGANImageGenerator,
     "GFPGANImageGenerator": GFPGANImageGenerator,
+    "InpaintingLamaModelLoader": InpaintingLamaModelLoader,
+    "InpaintingLamaImageGenerator": InpaintingLamaImageGenerator,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -358,4 +463,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "GFPGANModelLoader": "GFPGAN Model Loader",
     "RealESRGANImageGenerator": "Real-ESRGAN Image Generator",
     "GFPGANImageGenerator": "GFPGAN Image Generator",
+    "InpaintingLamaModelLoader": "Inpainting Lama Model Loader",
+    "InpaintingLamaImageGenerator": "Inpainting Lama Image Generator",
 }
