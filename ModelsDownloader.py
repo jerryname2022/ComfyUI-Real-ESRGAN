@@ -1,5 +1,5 @@
-from huggingface_hub import snapshot_download
 import os
+# from huggingface_hub import snapshot_download
 
 # os.environ["http_proxy"] = "http://127.0.0.1:1081"
 # os.environ["https_proxy"] = "http://127.0.0.1:1081"
@@ -20,8 +20,18 @@ import os
 #     endpoint="https://hf-mirror.com",  # 国内镜像地址
 # )
 
-snapshot_download(
-    repo_id="h94/IP-Adapter",
-    local_dir="h94/IP-Adapter",
-    endpoint="https://hf-mirror.com",  # 国内镜像地址
-)
+# snapshot_download(
+#     repo_id="h94/IP-Adapter",
+#     local_dir="h94/IP-Adapter",
+#     endpoint="https://hf-mirror.com",  # 国内镜像地址
+# )
+
+from modelscope import snapshot_download
+
+cache_dir = "E:/ComfyUI/models/"
+model_id = "stabilityai/stable-diffusion-2-inpainting"
+# 'Qwen/Qwen-Image-Edit'
+# iic/cv_fft_inpainting_lama
+# model_dir = snapshot_download('Qwen/Qwen-Image-Edit', cache_dir=cache_dir)
+
+model_dir = snapshot_download(model_id, cache_dir=cache_dir)

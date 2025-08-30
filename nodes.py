@@ -16,7 +16,7 @@ from modelscope.utils.constant import Tasks
 from facexlib.utils.face_restoration_helper import FaceRestoreHelper
 
 import folder_paths
-from PIL import Image
+from PIL import Image, ImageFilter
 from .gfpgan.realesrgan.basicsr.rrdbnet_arch import RRDBNet
 from .gfpgan.realesrgan.basicsr.utils import img2tensor, tensor2img
 
@@ -214,20 +214,6 @@ class InpaintingLamaImageGenerator:
 
     @torch.no_grad()
     def gan_image(self, image_model, image, mask, threshold=0.25):
-        # image_width, image_height = image.shape[1], image.shape[2]
-        # mask_width, mask_height = mask.shape[1], mask.shape[2]
-
-        # if image_width == mask_width and image_height == mask_height:
-        #     # mask = mask.unsqueeze(-1)  # 形状变为 [b, w, h, c]
-        #     # 提取前三个通道,沿通道维度（dim=3）拼接
-        #     image = torch.cat([image[..., :3], mask.unsqueeze(-1)[..., :1]], dim=3)
-
-        #  torch.Size([1, 494, 933, 3]) torch.Size([1, 64, 64])
-        print("shape b ", image.shape, mask.shape)
-
-        # image_rgb = image[..., :3]
-        # image_alpha = image[..., 3]
-
         rgb_pil = Image.fromarray(
             torch.clamp(torch.round(255.0 * image[0]), 0, 255)
             .type(torch.uint8)
@@ -247,8 +233,6 @@ class InpaintingLamaImageGenerator:
             'mask': alpha_pil,
         }
 
-        # image_rgb = image_rgb.permute(0, 3, 1, 2)  # (b, h, w, c) --> (b, c, h, w)
-
         results = image_model(input)
         result = results[OutputKeys.OUTPUT_IMG]
 
@@ -257,18 +241,112 @@ class InpaintingLamaImageGenerator:
         image_rgb = torch.from_numpy(result_rgb) / 255
         image_rgb = image_rgb.unsqueeze(0)
 
-        print("gan_image", result.shape, image_rgb.shape)  # torch.Size([1, 494, 933, 3])
-        # torch.Size([1, 494, 933, 3]) torch.Size([1, 64, 64])
-
-        # image_rgb = image_rgb.permute(0, 3, 1, 2)  # (b, h, w, c) --> (b, c, h, w)
-        # print("gan_image 22", result.shape, image_rgb.shape)
-
         torch.cuda.empty_cache()
-        # gan_image (494, 933, 3)
-
-        # print("return final", mask.shape, result.shape)
 
         return (image_rgb, mask)
+
+
+class ImageMergeGenerator:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "background_image": ("IMAGE",),
+                "blend_width": ("INT", {"default": 5, "step": 1}),
+            },
+            "optional": {
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "gan_image"
+    CATEGORY = "Real-ESRGAN/Mask"
+
+    def calculate_edge_weight(self, i, j, height, width, blend_width):
+        """
+        计算边缘融合权重
+        """
+        # 计算到各边的距离
+        dist_top = i
+        dist_bottom = height - 1 - i
+        dist_left = j
+        dist_right = width - 1 - j
+
+        # 找到最近边缘的距离
+        min_dist = min(dist_top, dist_bottom, dist_left, dist_right)
+
+        # 计算权重（边缘处权重低，中心处权重高）
+        if min_dist < blend_width:
+            return min_dist / blend_width
+        return 1.0
+
+    @torch.no_grad()
+    def gan_image(self, image, background_image, blend_width=5):
+
+        image_width, image_height = image.shape[1], image.shape[2]
+        background_width, background_height = background_image.shape[1], background_image.shape[2]
+
+        image_pil = Image.fromarray(
+            torch.clamp(torch.round(255.0 * image[0]), 0, 255)
+            .type(torch.uint8)
+            .cpu()
+            .numpy()
+        ).convert("RGBA")
+
+        background_pil = Image.fromarray(
+            torch.clamp(torch.round(255.0 * background_image[0]), 0, 255)
+            .type(torch.uint8)
+            .cpu()
+            .numpy()
+        ).convert("RGBA")
+
+        offset_x = (background_width - image_width) // 2
+        offset_y = (background_height - image_height) // 2
+        if offset_x < 0:
+            offset_x = 0
+        if offset_y < 0:
+            offset_y = 0
+
+        # 转换为numpy数组进行处理
+        bg_arr = np.array(background_pil)
+        fg_arr = np.array(image_pil)
+
+        fg_height, fg_width = fg_arr.shape[:2]
+        # 确保位置在范围内
+        offset_x = max(0, min(offset_x, background_width - fg_width))
+        offset_y = max(0, min(offset_y, background_height - fg_height))
+
+        # 创建融合区域
+        blended = bg_arr.copy()
+        roi = blended[offset_y:offset_y + fg_height, offset_x:offset_x + fg_width]
+
+        # 对每个像素进行alpha混合
+        for i in range(fg_height):
+            for j in range(fg_width):
+                fg_pixel = fg_arr[i, j]
+                fg_alpha = fg_pixel[3] / 255.0
+
+                if fg_alpha > 0:
+                    # 计算边缘权重（距离边缘越近，融合程度越高）
+                    edge_weight = self.calculate_edge_weight(i, j, fg_height, fg_width, blend_width)
+
+                    # 混合颜色
+                    for c in range(3):
+                        roi[i, j, c] = int(
+                            fg_pixel[c] * fg_alpha * edge_weight +
+                            roi[i, j, c] * (1 - fg_alpha * edge_weight)
+                        )
+
+                    # 混合alpha
+                    roi[i, j, 3] = max(roi[i, j, 3], int(fg_pixel[3] * edge_weight))
+
+        image_rgb = torch.from_numpy(blended) / 255
+        image_rgb = image_rgb.unsqueeze(0)
+
+        torch.cuda.empty_cache()
+        return (image_rgb,)
 
 
 class RealESRGANImageGenerator:
@@ -456,6 +534,7 @@ NODE_CLASS_MAPPINGS = {
     "GFPGANImageGenerator": GFPGANImageGenerator,
     "InpaintingLamaModelLoader": InpaintingLamaModelLoader,
     "InpaintingLamaImageGenerator": InpaintingLamaImageGenerator,
+    "ImageMergeGenerator": ImageMergeGenerator,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -465,4 +544,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "GFPGANImageGenerator": "GFPGAN Image Generator",
     "InpaintingLamaModelLoader": "Inpainting Lama Model Loader",
     "InpaintingLamaImageGenerator": "Inpainting Lama Image Generator",
+    "ImageMergeGenerator": "Image Merge Generator",
 }
