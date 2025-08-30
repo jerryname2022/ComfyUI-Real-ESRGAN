@@ -185,10 +185,12 @@ class InpaintingLamaModelLoader:
 
     CATEGORY = "Real-ESRGAN/Model"
 
+    @torch.no_grad()
     def load_model(self, model_name):
         model_path = os.path.join(os.path.join(folder_paths.models_dir, model_name))
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        inpainting = pipeline(Tasks.image_inpainting, model=model_path, refine=True, device=device)
+
+        inpainting = pipeline(Tasks.image_inpainting, model=model_path, refine=False, device=device)
 
         return (inpainting,)
 
@@ -214,6 +216,8 @@ class InpaintingLamaImageGenerator:
 
     @torch.no_grad()
     def gan_image(self, image_model, image, mask, threshold=0.25):
+        print(image.shape, mask.shape)
+
         rgb_pil = Image.fromarray(
             torch.clamp(torch.round(255.0 * image[0]), 0, 255)
             .type(torch.uint8)
@@ -227,6 +231,8 @@ class InpaintingLamaImageGenerator:
             .cpu()
             .numpy()
         ).convert("L")
+
+        # print(image.shape, mask.shape, np.array(rgb_pil).shape, np.array(alpha_pil).shape)
 
         input = {
             'img': rgb_pil,
